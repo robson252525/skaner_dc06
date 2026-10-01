@@ -13,10 +13,9 @@ jobs:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
 
-      - name: Zabezpieczenie kodu main.dart
+      - name: Zabezpiecz wlasny main.dart
         run: |
-          mkdir -p /tmp/save_code
-          cp lib/main.dart /tmp/save_code/main.dart
+          cp lib/main.dart /tmp/prawidlowy_main.dart
 
       - name: Konfiguracja Javy
         uses: actions/setup-java@v4
@@ -29,19 +28,23 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generowanie struktury Androida
+      - name: Przygotowanie szkieletu projektu Android
         run: |
-          mkdir temp_app
-          cd temp_app
+          mkdir temp_build
+          cd temp_build
           flutter create --project-name skaner_dc06 . --platforms=android
           flutter pub add google_mlkit_text_recognition google_mlkit_barcode_scanning image_picker
           cp -r android ../
           cp pubspec.yaml ../
           cd ..
-          rm -rf temp_app
-          cp /tmp/save_code/main.dart lib/main.dart
+          rm -rf temp_build
 
-      - name: Ustawienie minimalnego SDK Androida na 21
+      - name: Przywrocenie wlasnego kodu z historia i skanerem
+        run: |
+          mkdir -p lib
+          cp /tmp/prawidlowy_main.dart lib/main.dart
+
+      - name: Konfiguracja Android SDK i uprawnien
         run: |
           sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 21/g' android/app/build.gradle* || true
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle* || true
@@ -49,7 +52,7 @@ jobs:
       - name: Pobranie zaleznosci
         run: flutter pub get
 
-      - name: Budowanie pliku APK
+      - name: Kompilacja APK
         run: flutter build apk --debug
 
       - name: Zapisz gotowy plik APK
