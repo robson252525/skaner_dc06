@@ -13,6 +13,11 @@ jobs:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
 
+      - name: Zabezpieczenie kodu main.dart
+        run: |
+          mkdir -p /tmp/save_code
+          cp lib/main.dart /tmp/save_code/main.dart
+
       - name: Konfiguracja Javy
         uses: actions/setup-java@v4
         with:
@@ -24,7 +29,7 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Przygotowanie czystego projektu Flutter
+      - name: Generowanie struktury Androida
         run: |
           mkdir temp_app
           cd temp_app
@@ -34,6 +39,7 @@ jobs:
           cp pubspec.yaml ../
           cd ..
           rm -rf temp_app
+          cp /tmp/save_code/main.dart lib/main.dart
 
       - name: Ustawienie minimalnego SDK Androida na 21
         run: |
