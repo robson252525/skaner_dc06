@@ -2,68 +2,68 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 
 void main() {
   runApp(const MaterialApp(
-    title: "Skaner DC06",
-    home: EkranAplikacji(),
+    title: "Kontrola DC06",
+    home: EkranGlowny(),
     debugShowCheckedModeBanner: false,
   ));
 }
 
-class RaportHistorii {
+class RekordSkanu {
   final String czas;
-  final String sciezkaPliku;
-  final String? produkt;
-  final String? data;
-  final String? partia;
-  final String? waga;
-  final String? wni;
-  final String? dostawca;
-  final String? ean;
+  final String sciezkaZdjecia;
+  final String produkt;
+  final String dataWaznosci;
+  final String partia;
+  final String waga;
+  final String wni;
+  final String dostawca;
+  final bool czyBrakujeWBazie;
 
-  RaportHistorii({
+  RekordSkanu({
     required this.czas,
-    required this.sciezkaPliku,
-    this.produkt,
-    this.data,
-    this.partia,
-    this.waga,
-    this.wni,
-    this.dostawca,
-    this.ean,
+    required this.sciezkaZdjecia,
+    required this.produkt,
+    required this.dataWaznosci,
+    required this.partia,
+    required this.waga,
+    required this.wni,
+    required this.dostawca,
+    required this.czyBrakujeWBazie,
   });
 }
 
-class EkranAplikacji extends StatefulWidget {
-  const EkranAplikacji({super.key});
+// Globalne listy pamięci – nie resetują się podczas pracy aplikacji
+final List<RekordSkanu> _magazynHistorii = [];
+final Set<String> _brakujaceNumeryWNI = {};
+
+class EkranGlowny extends StatefulWidget {
+  const EkranGlowny({super.key});
 
   @override
-  State<EkranAplikacji> createState() => _EkranAplikacjiState();
+  State<EkranGlowny> createState() => _EkranGlownyState();
 }
 
-class _EkranAplikacjiState extends State<EkranAplikacji> {
-  int _indeksZakladki = 0;
-  final List<RaportHistorii> _historia = [];
-
+class _EkranGlownyState extends State<EkranGlowny> {
+  int _karta = 0;
   File? _zdjecie;
-  bool _laduje = false;
+  bool _skanuje = false;
 
-  String? produkt;
-  String? dataWaznosci;
-  String? numerPartii;
-  String? masaNetto;
-  String? kodWNI;
-  String? nazwaDostawcy;
-  String? kodEAN;
+  String? _wynikProdukt;
+  String? _wynikData;
+  String? _wynikPartia;
+  String? _wynikWaga;
+  String? _wynikWni;
+  String? _wynikDostawca;
+  bool _czyWniNieznany = false;
 
   final ImagePicker _picker = ImagePicker();
-  final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
-  final BarcodeScanner _barcodeScanner = BarcodeScanner();
+  final TextRecognizer _ocr = TextRecognizer(script: TextRecognitionScript.latin);
 
-  final Map<String, String> bazaWNI = {
-    "22030207": "GOODVALLEY (Przechlewo)",
+  final Map<String, String> _bazaWNI = {
+    "22030207": "GOODVALLEY POLSKA (Przechlewo)",
     "28050201": "ANIMEX FOODS (Ełk)",
     "10020202": "ANIMEX FOODS (Kutno K2)",
     "10023801": "ANIMEX FOODS (Kutno K4)",
@@ -88,174 +88,200 @@ class _EkranAplikacjiState extends State<EkranAplikacji> {
 
   @override
   void dispose() {
-    _textRecognizer.close();
-    _barcodeScanner.close();
+    _ocr.close();
     super.dispose();
   }
 
-  Future<void> _zrobSkan(ImageSource zrodlo) async {
-    final XFile? plik = await _picker.pickImage(source: zrodlo, imageQuality: 95);
-    if (plik == null) return;
+  Future<void> _wykonajZdjecie(ImageSource source) async {
+    final pobranyPlik = await _picker.pickImage(source: source, imageQuality: 95);
+    if (pobranyPlik == null) return;
 
     setState(() {
-      _zdjecie = File(plik.path);
-      _laduje = true;
-      _resetujDane();
+      _zdjecie = File(pobranyPlik.path);
+      _skanuje = true;
     });
 
-    final inputImage = InputImage.fromFilePath(plik.path);
-
+    final inputImage = InputImage.fromFilePath(pobranyPlik.path);
     try {
-      final kody = await _barcodeScanner.processImage(inputImage);
-      if (kody.isNotEmpty) {
-        kodEAN = kody.first.rawValue;
-      }
-    } catch (_) {}
-
-    try {
-      final ocr = await _textRecognizer.processImage(inputImage);
-      _parsujTekst(ocr);
+      final ocrText = await _ocr.processImage(inputImage);
+      _przetworzTekst(ocrText);
     } catch (_) {}
 
     final teraz = DateTime.now();
-    final godzina = "${teraz.hour.toString().padLeft(2, '0')}:${teraz.minute.toString().padLeft(2, '0')}:${teraz.second.toString().padLeft(2, '0')}";
+    final czas = "${teraz.hour.toString().padLeft(2, '0')}:${teraz.minute.toString().padLeft(2, '0')}:${teraz.second.toString().padLeft(2, '0')}";
 
-    _historia.insert(
+    if (_czyWniNieznany && _wynikWni != null) {
+      _brakujaceNumeryWNI.add(_wynikWni!);
+    }
+
+    _magazynHistorii.insert(
       0,
-      RaportHistorii(
-        czas: godzina,
-        sciezkaPliku: plik.path,
-        produkt: produkt,
-        data: dataWaznosci,
-        partia: numerPartii,
-        waga: masaNetto,
-        wni: kodWNI,
-        dostawca: nazwaDostawcy,
-        ean: kodEAN,
+      RekordSkanu(
+        czas: czas,
+        sciezkaZdjecia: pobranyPlik.path,
+        produkt: _wynikProdukt ?? "Nieokreślony",
+        dataWaznosci: _wynikData ?? "Brak",
+        partia: _wynikPartia ?? "Brak",
+        waga: _wynikWaga ?? "Brak",
+        wni: _wynikWni ?? "Brak stempla",
+        dostawca: _wynikDostawca ?? "Nieznany zakład",
+        czyBrakujeWBazie: _czyWniNieznany,
       ),
     );
 
     setState(() {
-      _laduje = false;
+      _skanuje = false;
     });
   }
 
-  void _resetujDane() {
-    produkt = null;
-    dataWaznosci = null;
-    numerPartii = null;
-    masaNetto = null;
-    kodWNI = null;
-    nazwaDostawcy = null;
-    kodEAN = null;
-  }
-
-  void _parsujTekst(RecognizedText ocr) {
+  void _przetworzTekst(RecognizedText ocr) {
     List<String> linie = [];
     for (var b in ocr.blocks) {
       for (var l in b.lines) {
         linie.add(l.text.trim());
       }
     }
-
     String calosc = linie.join("\n").toUpperCase();
 
-    // Produkt
-    if (calosc.contains("KOTLETY")) {
-      produkt = "MIĘSO NA KOTLETY Z INDYKA";
-    } else if (calosc.contains("GULASZ")) {
-      produkt = "MIĘSO NA GULASZ Z SZYNKI";
-    } else if (calosc.contains("ROSOŁOWA")) {
-      produkt = "PORCJA ROSOŁOWA WOŁOWA";
-    } else if (calosc.contains("ŻEBERKA") || calosc.contains("ZEBERKA")) {
-      produkt = "ŻEBERKA WIEPRZOWE";
-    }
+    // 1. WETERYNARIA (WNI)
+    _wynikWni = null;
+    _wynikDostawca = null;
+    _czyWniNieznany = false;
 
-    // WNI
-    for (var k in bazaWNI.keys) {
+    // A. Szukanie bezpośrednio ze słownika
+    for (var k in _bazaWNI.keys) {
       if (calosc.replaceAll(RegExp(r'\s+'), '').contains(k)) {
-        kodWNI = k;
-        nazwaDostawcy = bazaWNI[k];
+        _wynikWni = k;
+        _wynikDostawca = _bazaWNI[k];
+        _czyWniNieznany = false;
         break;
       }
     }
-    if (kodWNI == null) {
-      final regWniOwal = RegExp(r'(?:PL\s*)?(\d{8})(?:\s*WE)?');
-      final matchWni = regWniOwal.firstMatch(calosc.replaceAll(" ", ""));
-      if (matchWni != null && matchWni.group(1) != kodEAN) {
-        kodWNI = matchWni.group(1);
-        nazwaDostawcy = bazaWNI[kodWNI] ?? "Zakład spoza listy";
+
+    // B. Jeśli nie ma w słowniku, szukamy formatu urzędowego w owalu (PL ... WE / 8 cyfr)
+    if (_wynikWni == null) {
+      final regOwal = RegExp(r'(?:PL\s*)?(\b\d{8}\b)(?:\s*WE)?');
+      final match = regOwal.firstMatch(calosc.replaceAll(" ", ""));
+      if (match != null) {
+        _wynikWni = match.group(1);
+        _wynikDostawca = "DO UZUPEŁNIENIA W BAZIE";
+        _czyWniNieznany = true;
       }
     }
 
-    // Data i Partia (analiza pionowa)
+    // 2. PRODUKT
+    _wynikProdukt = null;
+    for (var l in linie) {
+      String u = l.toUpperCase();
+      if (u.contains("KOTLETY") || u.contains("GULASZ") || u.contains("ROSOŁOWA") || u.contains("ŻEBERKA") || u.contains("SCHAB") || u.contains("KARKÓWKA") || u.contains("FILET")) {
+        _wynikProdukt = u;
+        break;
+      }
+    }
+    _wynikProdukt ??= (linie.isNotEmpty && linie.first.length > 4 ? linie.first : null);
+
+    // 3. DATA WAŻNOŚCI I NUMER PARTII
+    _wynikData = null;
+    _wynikPartia = null;
+
     final regData = RegExp(r'(\b\d{2}[.\-/]\d{2}[.\-/]\d{4}\b)');
     for (int i = 0; i < linie.length; i++) {
-      final match = regData.firstMatch(linie[i]);
-      if (match != null) {
-        dataWaznosci = match.group(0);
-
+      final m = regData.firstMatch(linie[i]);
+      if (m != null) {
+        _wynikData = m.group(0);
         if (i + 1 < linie.length) {
-          String podSpodem = linie[i + 1].trim();
-          final regPartiaLinia = RegExp(r'^[A-Z0-9\-/]{4,15}$');
-          if (regPartiaLinia.hasMatch(podSpodem) && !podSpodem.contains("PRZECH") && !podSpodem.contains("MASA")) {
-            numerPartii = podSpodem;
+          String kolejna = linie[i + 1].trim();
+          final regPartia = RegExp(r'^[A-Z0-9\-/]{4,15}$');
+          if (regPartia.hasMatch(kolejna) && !kolejna.contains("PRZECH") && !kolejna.contains("MASA")) {
+            _wynikPartia = kolejna;
           }
         }
         break;
       }
     }
 
-    if (numerPartii == null) {
-      for (int i = 0; i < linie.length; i++) {
-        String l = linie[i].toUpperCase();
-        if (l.contains("NUMER PARTII") || l.contains("NR PARTII") || l.contains("LOT")) {
-          final regCyfry = RegExp(r'(\d{6,14})');
-          final mCyfry = regCyfry.firstMatch(l);
-          if (mCyfry != null) {
-            numerPartii = mCyfry.group(1);
-          } else if (i + 1 < linie.length) {
-            final regNastepna = RegExp(r'^[A-Z0-9\-/]{4,15}$');
-            if (regNastepna.hasMatch(linie[i + 1].trim())) {
-              numerPartii = linie[i + 1].trim();
-            }
-          }
-          break;
-        }
-      }
-    }
-
-    // Masa
-    final regWaga = RegExp(r'(\d+[.,]?\d*)\s*(KG|G)\b');
-    final matchWaga = regWaga.firstMatch(calosc);
-    if (matchWaga != null) {
-      masaNetto = "${matchWaga.group(1)} ${matchWaga.group(2)}";
+    // 4. MASA NETTO
+    _wynikWaga = null;
+    final regMasa = RegExp(r'(\d+[.,]?\d*)\s*(KG|G)\b');
+    final matchMasa = regMasa.firstMatch(calosc);
+    if (matchMasa != null) {
+      _wynikWaga = "${matchMasa.group(1)} ${matchMasa.group(2)}";
     }
   }
 
-  Widget _kafelek(String tytul, String? wartosc, String brak) {
-    bool ok = wartosc != null && wartosc.isNotEmpty;
+  void _pokazBrakujaceWNI() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: const [
+            Icon(Icons.warning_amber_rounded, color: Colors.deepOrange),
+            SizedBox(width: 8),
+            Text("Brakujące WNI", style: TextStyle(fontSize: 18)),
+          ],
+        ),
+        content: _brakujaceNumeryWNI.isEmpty
+            ? const Text("Baza jest kompletna! Wszystkie odczytane dotąd numery WNI są przypisane.")
+            : SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _brakujaceNumeryWNI
+                      .map((wni) => ListTile(
+                            leading: const Icon(Icons.add_circle_outline, color: Colors.red),
+                            title: Text(wni, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                            subtitle: const Text("Odczytany stempel – brak zakładu w kodzie"),
+                          ))
+                      .toList(),
+                ),
+              ),
+        actions: [
+          if (_brakujaceNumeryWNI.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                setState(() => _brakujaceNumeryWNI.clear());
+                Navigator.pop(ctx);
+              },
+              child: const Text("Wyczyść listę", style: TextStyle(color: Colors.red)),
+            ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Zamknij")),
+        ],
+      ),
+    );
+  }
+
+  Widget _wierszDanych(String tytul, String? wartosc, {bool wyroznij = false, bool brakWBazie = false}) {
+    bool ok = wartosc != null && wartosc.isNotEmpty && wartosc != "Brak";
+    Color tlo = ok ? Colors.green.withValues(alpha: 0.12) : Colors.red.withValues(alpha: 0.08);
+    Color ramka = ok ? Colors.green.shade600 : Colors.red.shade300;
+    Color kolorTekstu = ok ? Colors.green.shade900 : Colors.red.shade800;
+
+    if (brakWBazie) {
+      tlo = Colors.orange.withValues(alpha: 0.15);
+      ramka = Colors.deepOrange;
+      kolorTekstu = Colors.deepOrange.shade900;
+    } else if (wyroznij && ok) {
+      ramka = Colors.blue.shade700;
+      kolorTekstu = Colors.blue.shade900;
+    }
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 3),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: ok ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE),
+        color: tlo,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: ok ? Colors.green : Colors.red.shade300),
+        border: Border.all(color: ramka, width: (wyroznij || brakWBazie) ? 2.0 : 1.0),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(tytul, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          Text(tytul, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: brakWBazie ? Colors.deepOrange.shade900 : Colors.black87)),
           Flexible(
             child: Text(
-              ok ? wartosc! : brak,
+              ok ? wartosc! : "BRAK",
               textAlign: TextAlign.right,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                color: ok ? Colors.green.shade900 : Colors.red.shade900,
-              ),
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: kolorTekstu),
             ),
           ),
         ],
@@ -267,31 +293,55 @@ class _EkranAplikacjiState extends State<EkranAplikacji> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_indeksZakladki == 0 ? "Kontrola Etykiet DC06" : "Historia Kontroli (${_historia.length})"),
+        title: Text(_karta == 0 ? "Kontrola DC06" : "Historia skanów (${_magazynHistorii.length})"),
         backgroundColor: Colors.orange.shade800,
         actions: [
-          if (_indeksZakladki == 1 && _historia.isNotEmpty)
+          IconButton(
+            icon: Stack(
+              children: [
+                const Icon(Icons.assignment_late_outlined, size: 28),
+                if (_brakujaceNumeryWNI.isNotEmpty)
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                      constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+                      child: Text(
+                        '${_brakujaceNumeryWNI.length}',
+                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            tooltip: "Brakujące WNI do dodania",
+            onPressed: _pokazBrakujaceWNI,
+          ),
+          if (_karta == 1 && _magazynHistorii.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_forever),
               tooltip: "Wyczyść historię",
-              onPressed: () => setState(() => _historia.clear()),
+              onPressed: () => setState(() => _magazynHistorii.clear()),
             ),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _indeksZakladki,
+        currentIndex: _karta,
         selectedItemColor: Colors.orange.shade900,
-        onTap: (i) => setState(() => _indeksZakladki = i),
+        onTap: (i) => setState(() => _karta = i),
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: "Skaner"),
+          BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner), label: "Skanuj"),
           BottomNavigationBarItem(icon: Icon(Icons.history), label: "Historia"),
         ],
       ),
-      body: _indeksZakladki == 0 ? _widokSkanera() : _widokHistorii(),
+      body: _karta == 0 ? _budujSkaner() : _budujHistorie(),
     );
   }
 
-  Widget _widokSkanera() {
+  Widget _budujSkaner() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -300,7 +350,7 @@ class _EkranAplikacjiState extends State<EkranAplikacji> {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _laduje ? null : () => _zrobSkan(ImageSource.camera),
+                  onPressed: _skanuje ? null : () => _wykonajZdjecie(ImageSource.camera),
                   icon: const Icon(Icons.camera_alt, color: Colors.white),
                   label: const Text("Aparat", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade700, padding: const EdgeInsets.symmetric(vertical: 12)),
@@ -309,7 +359,7 @@ class _EkranAplikacjiState extends State<EkranAplikacji> {
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _laduje ? null : () => _zrobSkan(ImageSource.gallery),
+                  onPressed: _skanuje ? null : () => _wykonajZdjecie(ImageSource.gallery),
                   icon: const Icon(Icons.photo_library, color: Colors.white),
                   label: const Text("Z galerii", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey, padding: const EdgeInsets.symmetric(vertical: 12)),
@@ -318,47 +368,50 @@ class _EkranAplikacjiState extends State<EkranAplikacji> {
             ],
           ),
           const SizedBox(height: 10),
-          if (_laduje)
+          if (_skanuje)
             const Padding(
-              padding: EdgeInsets.all(20),
+              padding: EdgeInsets.all(24),
               child: CircularProgressIndicator(),
             ),
-          if (_zdjecie != null && !_laduje) ...[
+          if (_zdjecie != null && !_skanuje) ...[
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(6),
               child: Image.file(_zdjecie!, height: 160, width: double.infinity, fit: BoxFit.cover),
             ),
-            const SizedBox(height: 10),
-            _kafelek("Produkt", produkt, "NIE ROZPOZNANO"),
-            _kafelek("Termin ważności", dataWaznosci, "BRAK DATY"),
-            _kafelek("Numer partii", numerPartii, "BRAK PARTII"),
-            _kafelek("Masa netto", masaNetto, "BRAK WAGI"),
-            _kafelek("Stempel WNI", kodWNI, "BRAK (SPRAWDŹ SPÓD)"),
-            _kafelek("Dostawca", nazwaDostawcy, "BRAK W BAZIE"),
-            _kafelek("Kod EAN", kodEAN, "BRAK (SPRAWDŹ SPÓD)"),
+            const SizedBox(height: 8),
+            _wierszDanych("WETERYNARYJNY (WNI)", _wynikWni, wyroznij: !_czyWniNieznany, brakWBazie: _czyWniNieznany),
+            _wierszDanych("Dostawca / Zakład", _wynikDostawca, brakWBazie: _czyWniNieznany),
+            _wierszDanych("Produkt", _wynikProdukt),
+            _wierszDanych("Termin ważności", _wynikData),
+            _wierszDanych("Numer partii", _wynikPartia),
+            _wierszDanych("Masa netto", _wynikWaga),
           ],
         ],
       ),
     );
   }
 
-  Widget _widokHistorii() {
-    if (_historia.isEmpty) {
-      return const Center(child: Text("Brak zapisanych kontroli. Zrób skan."));
+  Widget _budujHistorie() {
+    if (_magazynHistorii.isEmpty) {
+      return const Center(child: Text("Brak zapisanych skanów w historii."));
     }
     return ListView.builder(
-      itemCount: _historia.length,
-      itemBuilder: (context, i) {
-        final el = _historia[i];
+      itemCount: _magazynHistorii.length,
+      itemBuilder: (ctx, i) {
+        final r = _magazynHistorii[i];
         return Card(
           margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: r.czyBrakujeWBazie ? const BorderSide(color: Colors.deepOrange, width: 1.5) : BorderSide.none,
+          ),
           child: Padding(
             padding: const EdgeInsets.all(8),
             child: Row(
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(6),
-                  child: Image.file(File(el.sciezkaPliku), width: 70, height: 70, fit: BoxFit.cover),
+                  child: Image.file(File(r.sciezkaZdjecia), width: 75, height: 75, fit: BoxFit.cover),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -368,13 +421,20 @@ class _EkranAplikacjiState extends State<EkranAplikacji> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(el.czas, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blueGrey)),
-                          Text(el.waga ?? "--", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+                          Text("WNI: ${r.wni}", style: TextStyle(fontWeight: FontWeight.bold, color: r.czyBrakujeWBazie ? Colors.deepOrange : Colors.blue)),
+                          Text(r.czas, style: const TextStyle(fontSize: 11, color: Colors.grey)),
                         ],
                       ),
-                      Text(el.produkt ?? "Produkt nieznany", style: const TextStyle(fontWeight: FontWeight.bold)),
-                      Text("Data: ${el.data ?? '--'} | Partia: ${el.partia ?? '--'}"),
-                      Text("Dostawca: ${el.dostawca ?? el.wni ?? '--'}", style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                      Text(
+                        r.dostawca,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                          color: r.czyBrakujeWBazie ? Colors.deepOrange.shade800 : Colors.black87,
+                        ),
+                      ),
+                      Text("${r.produkt} | ${r.waga}", style: const TextStyle(fontSize: 12)),
+                      Text("Data: ${r.dataWaznosci} | Partia: ${r.partia}", style: const TextStyle(fontSize: 11, color: Colors.black54)),
                     ],
                   ),
                 ),
